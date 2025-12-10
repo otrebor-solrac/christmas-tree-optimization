@@ -39,13 +39,15 @@ class CostEvaluator:
             return 0.0
         try:
             union_poly = unary_union(polys)
-            _, _, maxx, maxy = union_poly.bounds
-            return max(maxx, maxy) / self.scale_factor
+            minx, miny, maxx, maxy = union_poly.bounds
+            w = maxx - minx
+            h = maxy - miny
+            return max(w, h) / self.scale_factor
         
         except Exception:
             return 1000.0
 
-    def calculate_soft_overlap(self, trees):
+    def calculate_soft_overlap(self, trees) -> float:
         """
         Calculate the soft overlap metric (total overlapping area between trees).
         
@@ -70,10 +72,13 @@ class CostEvaluator:
             """
             CALCULA EL SCORE OFICIAL DE KAGGLE.
 
-            Fórmula: Score = Lado * Lado
+            Fórmula: Score = (Lado * Lado) / N
             """
+            if not trees:
+                return 0.0
             side = self.calculate_bounds_score(trees)
-            return side * side
+            area = side * side
+            return area / len(trees)
 
 
     def get_total_energy(self, trees, penalty_weight):

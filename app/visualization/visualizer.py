@@ -63,6 +63,14 @@ class TreeVisualizer:
         # Solo ajustar límites si se solicita
         if adjust_limits:
             margin = side * 0.1
+            margin_x = side * 0.1
+            margin_y = side * 0.1
+            if margin == 0: 
+               margin = 0.5
+            
+            # Usar autoscale para asegurar que todo se ve primero
+            ax.autoscale(True)
+            # Luego imponer margen alrededor del bounding box cuadrado para centrarlo
             ax.set_xlim(origin_x - margin, origin_x + side + margin)
             ax.set_ylim(origin_y - margin, origin_y + side + margin)
         

@@ -30,7 +30,6 @@ video_frames/
 *.mp4
 
 # Datos y resultados temporales
-*.csv
 *.png
 *.jpg
 *.jpeg
