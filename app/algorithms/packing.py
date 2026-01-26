@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
+from shapely.prepared import prep
 
 from ..models.tree import ChristmasTree
 from ..evaluation.cost_evaluator import CostEvaluator
@@ -122,14 +123,15 @@ class PackingAlgorithm:
     def set_initial_state(self, existing_trees):
         if existing_trees:
             self.trees = copy.deepcopy(existing_trees)
-            self._refresh_current_score()
+            self.refresh_current_score()
         else:
             self.trees = []
             self.best_score = float('inf')
 
-    def detect_collisions(self, trees):
+    def detect_collisions(self, trees, early_stop=False):
         # Detecta colisiones entre árboles. Método público reutilizable.
         # Args: trees: Lista de árboles a verificar
+        #       early_stop: Si True, retorna inmediatamente al encontrar la primera colisión.
         # Returns: tuple: (has_collisions: bool, collision_pairs: list)
 
         if not trees or len(trees) < 2:
@@ -139,28 +141,26 @@ class PackingAlgorithm:
         tree_index = STRtree(polys)
         tolerance_area = (float(self.scale_factor) ** 2) * 1e-9
         collision_pairs = []
-        checked_pairs = set()
         
         for i, t in enumerate(trees):
             candidates = tree_index.query(t.polygon)
             for c_idx in candidates:
-                if c_idx == i:
+                # Optimización: Solo verificar pares una vez (i < c_idx)
+                # y evitar auto-intersección (i == c_idx)
+                if c_idx <= i:
                     continue
-                
-                # Evitar duplicados (i, j) y (j, i)
-                pair = tuple(sorted([i, c_idx]))
-                if pair in checked_pairs:
-                    continue
-                checked_pairs.add(pair)
                 
                 # Verificar intersección real
-                inter = t.polygon.intersection(polys[c_idx])
-                if inter.area > tolerance_area:
-                    collision_pairs.append((trees[i].id, trees[c_idx].id))
+                # intersects() es mucho más rápido que intersection().area
+                if t.polygon.intersects(polys[c_idx]):
+                    if t.polygon.intersection(polys[c_idx]).area > tolerance_area:
+                        if early_stop:
+                            return True, [(trees[i].id, trees[c_idx].id)]
+                        collision_pairs.append((trees[i].id, trees[c_idx].id))
         
         return len(collision_pairs) > 0, collision_pairs
 
-    def _refresh_current_score(self):
+    def refresh_current_score(self):
         """Valida el estado actual y actualiza el score."""
         if not self.trees:
             self.best_score = 0.0
@@ -181,14 +181,17 @@ class PackingAlgorithm:
     def _check_strict_collision(self, new_tree, static_trees):
         """Verifica colisión con tolerancia numérica."""
         if not static_trees: return False
-        static_polys = [t.polygon for t in static_trees]
-        tree_index = STRtree(static_polys)
-        candidate_indices = tree_index.query(new_tree.polygon)
+        
+        # Optimización: Iteración directa con prepared geometry
+        # Evita el costo O(N log N) de construir STRtree para una sola consulta
+        new_poly = new_tree.polygon
+        prepared_new = prep(new_poly)
         tolerance_area = (float(self.scale_factor) ** 2) * 1e-9
 
-        for i in candidate_indices:
-            if new_tree.polygon.intersection(static_polys[i]).area > tolerance_area:
-                return True
+        for t in static_trees:
+            if prepared_new.intersects(t.polygon):
+                if new_poly.intersection(t.polygon).area > tolerance_area:
+                    return True
         return False
 
     def add_configured_tree(self, tree_id, x, y, angle, fixed=True):
@@ -196,7 +199,7 @@ class PackingAlgorithm:
         new_tree = ChristmasTree(tree_id, x, y, angle, fixed=fixed)
         self.trees.append(new_tree)
         print(f"-> Manual: Árbol {tree_id} en ({x}, {y}) [Fixed={fixed}]")
-        self._refresh_current_score()
+        self.refresh_current_score()
     
     def _strategy_linear_zipper(self, tree_id):
         """ESTRATEGIA 1: Tira infinita (Cremallera). Bueno para n pequeño."""
@@ -270,520 +273,6 @@ class PackingAlgorithm:
             new_x += (stride_x / 2) # Desplazar medio paso a la derecha
 
         return self._add_jitter(ChristmasTree(tree_id, new_x, new_y, new_angle, fixed=False))
-
-        return self._add_jitter(ChristmasTree(tree_id, new_x, new_y, new_angle, fixed=False))
-        
-    def _calculate_smart_grid(self, n_blocks):
-        """
-        Calcula las dimensiones (cols, rows) y el patrón de llenado para n_blocks.
-        Reglas inferidas:
-        - Si n_blocks es cuadrado perfecto (4, 9, 16...): Usar Grid Denso (n x n).
-        - Si no: Usar Grid 'Checkerboard' (Ajedrez) para máxima holgura.
-        
-        Returns:
-            (cols, rows, pattern_type)
-            pattern_type: 'dense' | 'checkerboard'
-        """
-        # 1. Comprobar si es cuadrado perfecto
-        sqrt_n = math.isqrt(n_blocks)
-        if sqrt_n * sqrt_n == n_blocks:
-            # Caso 8 árboles (B=4) -> 2x2 Denso
-            return sqrt_n, sqrt_n, 'dense'
-        
-        # 2. Si no es cuadrado, buscar grid para Checkerboard
-        # Capacidad Checkboard de un grid C x R es: ceil(C*R / 2)
-        # Buscamos el grid más pequeño y cuadrado posible
-        
-        best_cols, best_rows = None, None
-        min_area = float('inf')
-        min_diff = float('inf')
-        
-        # Iterar posibles áreas desde 2*N hasta 4*N (holgura suficiente)
-        # B=2 -> Area ideal 4 (2x2)
-        # B=3 -> Area ideal 6 (3x2)
-        start_area = n_blocks * 2
-        end_area = n_blocks * 4
-        
-        for area in range(start_area, end_area + 1):
-            # Factorizar área
-            for c in range(1, int(math.sqrt(area)) + 1):
-                if area % c == 0:
-                    r = area // c
-                    # c es el lado pequeño, r el grande. 
-                    # Verificar capacidad checkerboard
-                    capacity = math.ceil((c * r) / 2)
-                    if capacity >= n_blocks:
-                        # Es válido. Verificar si es mejor que lo que tenemos.
-                        # Criterio 1: Menor Área. Criterio 2: Más cuadrado (|c-r|)
-                        diff = abs(c - r)
-                        if area < min_area:
-                            min_area = area
-                            min_diff = diff
-                            best_cols, best_rows = r, c # r es mayor o igual, preferimos horizontal o vertical? Indiferente.
-                        elif area == min_area and diff < min_diff:
-                            min_diff = diff
-                            best_cols, best_rows = r, c
-                            
-        # Caso especial: N=4 (2 bloques) -> Patrón diagonal
-        if n_blocks == 2:
-            return 2, 2, 'diagonal'
-        
-        return best_cols, best_rows, 'checkerboard'
-
-    def generate_tessellated_solution(self, n_target, visualizer=None, enable_flip=False):
-        """
-        Genera una solución basada en la replicación de la 'Célula Unitaria' T2.
-        Solo funciona si n_target es par y existe solutions/T2.csv.
-        """
-        if n_target % 2 != 0 and n_target % 3 != 0:
-            print(f"   [Tessellation] Skip: N={n_target} no es múltiplo de 2 ni de 3.")
-            return False
-            
-        try:
-            # 1. Cargar Célula Madre (T2 o T3)
-            # Determinar base
-            if n_target % 3 == 0 and (math.sqrt(n_target/3)).is_integer():
-                base_file = "solutions/T3.csv"
-                n_base = 3
-            else:
-                base_file = "solutions/T2.csv"
-                n_base = 2
-
-            base_trees = load_solution(base_file)
-            if len(base_trees) != n_base:
-                print(f"   [Tessellation] Error: {base_file} no tiene {n_base} árboles.")
-                return False
-                
-            t1 = base_trees[0]
-            # Usar estructura de T2 o T3
-            # Para T3 también necesitamos calcular el desplazamiento global del bloque
-            
-            # Vector de desplazamiento relativo
-            # Vector de desplazamiento relativo (solo útil para pares por ahora, para trios asumimos bloque fijo)
-            # Para T3 asumimos que ya forman un bloque cohesivo
-            
-            # Ángulos base y deltas relativos
-            relative_props = []
-            for i in range(1, n_base):
-                t_curr = base_trees[i]
-                dx = float(t_curr.center_x) - float(t1.center_x)
-                dy = float(t_curr.center_y) - float(t1.center_y)
-                relative_props.append((dx, dy, float(t_curr.angle)))
-            
-            angle1 = float(t1.angle)
-            
-            # Calculamos bounding box conjunta
-            polys = [t.polygon for t in base_trees]
-            union_poly = unary_union(polys)
-            minx, miny, maxx, maxy = union_poly.bounds
-            
-            # DES-ESCALAR para trabajar en coordenadas normalizadas
-            sf = float(self.scale_factor)
-            minx /= sf
-            miny /= sf
-            maxx /= sf
-            maxy /= sf
-            
-            block_w = (maxx - minx) * 1.05 # 5% de holgura para evitar colisiones
-            block_h = (maxy - miny) * 1.05
-            
-            # Offset del t1 respecto a la esquina del bloque
-            offset_x = float(t1.center_x) - minx
-            offset_y = float(t1.center_y) - miny
-            
-        except Exception as e:
-            print(f"   [Tessellation] Error cargando T2 ({e}). Usando estrategia normal.")
-            return False
-
-        print(f"\n>>> ESTRATEGIA MOSAICO (Tessellation) Activada para N={n_target} (Base T{n_base}) <<<")
-        print(f"   Bloque Base: {block_w:.4f} x {block_h:.4f}")
-        
-        # 2. Configurar Grid Inteligente
-        n_blocks = n_target // n_base
-        cols, rows, pattern = self._calculate_smart_grid(n_blocks)
-        
-        print(f"   Grid Inteligente: {cols}x{rows} bloques | Mode: {pattern.upper()} ({n_blocks} bloques)")
-        
-        self.trees = []
-        block_count = 0
-        
-        # 3. Generar
-        # Centrar el grid en 0,0 aproximadamente
-        grid_w = cols * block_w
-        grid_h = rows * block_h
-        start_x = -grid_w / 2
-        start_y = -grid_h / 2
-        
-        current_id = 1
-        
-        for r in range(rows):
-            for c in range(cols):
-                if block_count >= n_blocks:
-                    break
-                
-                # Check Pattern
-                if pattern == 'checkerboard':
-                    if (r + c) % 2 != 0: # Solo casillas pares (tipo ajedrez)
-                        continue
-                elif pattern == 'diagonal':
-                    # Para N=4 (2 bloques): Solo cuadrantes 1 y 3 (diagonal)
-                    # Cuadrante 1: r=0, c=1 (arriba-derecha)
-                    # Cuadrante 3: r=1, c=0 (abajo-izquierda)
-                    if not ((r == 0 and c == 1) or (r == 1 and c == 0)):
-                        continue
-                
-                # Posición base del bloque
-                bx = start_x + (c * block_w)
-                by = start_y + (r * block_h)
-                
-                # Posición Árbol 1 del par (ajustada por offset interno)
-                x1 = bx + offset_x
-                y1 = by + offset_y
-                
-                # Determinar si este bloque debe estar flipeado
-                should_flip = False
-                if enable_flip:
-                    # Patrón checkerboard por defecto si se habilita
-                    should_flip = (c + r) % 2 == 1
-                
-                # Posición Árbol 2 del par (relativa a T1)
-                # Añadir árboles del bloque
-                # Árbol 1 (Pivote)
-                if should_flip:
-                    # Flip horizontal: invertir x
-                    x1_flipped = bx + block_w - offset_x
-                    self.trees.append(ChristmasTree(current_id, x1_flipped, y1, -angle1, fixed=False))
-                else:
-                    self.trees.append(ChristmasTree(current_id, x1, y1, angle1, fixed=False))
-                current_id += 1
-                
-                # Resto de árboles
-                for dx, dy, ang in relative_props:
-                    if should_flip:
-                        # Flip horizontal: invertir dx y ang
-                        xn = x1_flipped - dx
-                        yn = y1 + dy
-                        ang_flipped = -ang
-                        self.trees.append(ChristmasTree(current_id, xn, yn, ang_flipped, fixed=False))
-                    else:
-                        xn = x1 + dx
-                        yn = y1 + dy
-                        self.trees.append(ChristmasTree(current_id, xn, yn, ang, fixed=False))
-                    current_id += 1
-                
-                block_count += 1
-        
-        self._refresh_current_score()
-        
-        # 4. Ajuste Fino (Annealing Rápido)
-        # Como la estructura es buena, hacemos un annealing de baja temperatura para resolver colisiones leves
-        print("   -> Ajuste fino de la estructura (Annealing)...")
-        self._run_annealing(
-            iterations=self.config.attempt_1_iters, # Usar iteraciones estándar (ej: 2000)
-            initial_temp=0.1, # Temp muy baja, solo vibración
-            mag_factor=0.1,   # Magnitud pequeña
-            visualizer=visualizer,
-            allow_area_growth=True
-        )
-        
-        return True
-
-
-    def generate_custom_mosaic(self, n_target, n_base, cols, rows, visualizer=None):
-        """
-        Estrategia Mosaico Personalizado:
-        Genera una solución para n_target usando cols*rows bloques de la solución T(n_base).
-        Ejemplo: N=20, Base=5, Grid=2x2.
-        """
-        base_file = f"solutions/T{n_base}.csv"
-        try:
-            base_trees = load_solution(base_file)
-        except Exception:
-            print(f"   [MosaicCustom] Skip: No existe {base_file}")
-            return False
-            
-        if len(base_trees) != n_base:
-            print(f"   [MosaicCustom] Error: {base_file} tiene {len(base_trees)} árboles, se requerían {n_base}")
-            return False
-            
-        # Analizar bloque base
-        polys = [t.polygon for t in base_trees]
-        from shapely.ops import unary_union
-        union = unary_union(polys)
-        minx, miny, maxx, maxy = union.bounds
-        
-        # Normalizar dimensiones (dividir por SCALE_FACTOR)
-        sf = float(self.scale_factor)
-        block_w = (maxx - minx) / sf
-        block_h = (maxy - miny) / sf
-        
-        # Centrar el bloque base localmente en (0,0)
-        cx = ((minx + maxx) / 2) / sf
-        cy = ((miny + maxy) / 2) / sf
-        
-        base_centered = []
-        for t in base_trees:
-            nt = copy.deepcopy(t)
-            nt.center_x = Decimal(float(nt.center_x) - cx)
-            nt.center_y = Decimal(float(nt.center_y) - cy)
-            nt.update_polygon()
-            base_centered.append(nt)
-            
-        print(f">>> ESTRATEGIA MOSAICO CUSTOM: N={n_target} (Base T{n_base} x {cols}x{rows} bloques) <<<")
-        print(f"   Bloque Base: {block_w:.4f} x {block_h:.4f}")
-
-        # Generar
-        new_trees = []
-        global_id = 1
-        
-        # Espaciado "justo" (as tight as possible)
-        stride_x = block_w
-        stride_y = block_h
-        
-        # Centrar todo el arreglo
-        total_w = cols * stride_x
-        total_h = rows * stride_y
-        start_x = -total_w / 2 + stride_x / 2
-        start_y = -total_h / 2 + stride_y / 2
-        
-        blocks_placed = 0
-        expected_blocks = cols * rows
-        
-        for r in range(rows):
-            for c in range(cols):
-                if blocks_placed >= expected_blocks: break
-                
-                # Posición del centro del bloque
-                bx = start_x + c * stride_x
-                by = start_y + r * stride_y
-                
-                # Insertar árboles del bloque
-                for t in base_centered:
-                    # Copiar y trasladar
-                    final_tree = copy.deepcopy(t)
-                    final_tree.id = global_id
-                    final_tree.center_x = Decimal(float(final_tree.center_x) + bx)
-                    final_tree.center_y = Decimal(float(final_tree.center_y) + by)
-                    final_tree.update_polygon()
-                    new_trees.append(final_tree)
-                    global_id += 1
-                
-                blocks_placed += 1
-                
-        self.trees = new_trees
-        self._refresh_current_score()
-        
-        # Annealing suave para ajustar
-        print("   -> Ajuste fino (Tuning)...")
-        # Usamos un annealing muy corto pero efectivo para eliminar superposiciones leves
-        self._run_annealing(iterations=2000, initial_temp=0.2, mag_factor=0.1, visualizer=visualizer, allow_area_growth=True)
-        
-        return True
-
-
-        """
-        Estrategia Mosaico Cuadrado:
-        Si N = k^2, usa k bloques de la solución T(k).
-        Organiza los k bloques en un grid optimizado.
-        """
-        base_file = f"solutions/T{k_base}.csv"
-        try:
-            base_trees = load_solution(base_file)
-        except Exception:
-            print(f"   [MosaicSq] Skip: No existe {base_file}")
-            return False
-            
-        if len(base_trees) != k_base:
-            print(f"   [MosaicSq] Error: {base_file} tiene {len(base_trees)} árboles, se requerían {k_base}")
-            return False
-            
-        # Analizar bloque base
-        polys = [t.polygon for t in base_trees]
-        from shapely.ops import unary_union
-        union = unary_union(polys)
-        minx, miny, maxx, maxy = union.bounds
-        
-        # Normalizar dimensiones (dividir por SCALE_FACTOR)
-        sf = float(self.scale_factor)
-        block_w = (maxx - minx) / sf
-        block_h = (maxy - miny) / sf
-        
-        # Centrar el bloque base localmente en (0,0)
-        cx = ((minx + maxx) / 2) / sf
-        cy = ((miny + maxy) / 2) / sf
-        
-        base_centered = []
-        for t in base_trees:
-            nt = copy.deepcopy(t)
-            nt.center_x = Decimal(float(nt.center_x) - cx)
-            nt.center_y = Decimal(float(nt.center_y) - cy)
-            nt.update_polygon()
-            base_centered.append(nt)
-            
-        print(f">>> ESTRATEGIA MOSAICO CUADRADO: N={n_target} (Base T{k_base} x {k_base} bloques) <<<")
-        print(f"   Bloque Base: {block_w:.4f} x {block_h:.4f}")
-
-        # Calcular grid para colocar los k_base bloques
-        num_blocks = k_base
-        cols, rows, _ = self._calculate_smart_grid(num_blocks)
-        print(f"   Disposición de Bloques: {cols} cols x {rows} rows")
-        
-        # Generar
-        new_trees = []
-        global_id = 1
-        
-        # Espaciado "justo" (as tight as possible)
-        stride_x = block_w
-        stride_y = block_h
-        
-        # Centrar todo el arreglo
-        total_w = cols * stride_x
-        total_h = rows * stride_y
-        start_x = -total_w / 2 + stride_x / 2
-        start_y = -total_h / 2 + stride_y / 2
-        
-        blocks_placed = 0
-        
-        for r in range(rows):
-            for c in range(cols):
-                if blocks_placed >= num_blocks: break
-                
-                # Posición del centro del bloque
-                bx = start_x + c * stride_x
-                by = start_y + r * stride_y
-                
-                # Insertar árboles del bloque
-                for t in base_centered:
-                    # Copiar y trasladar
-                    final_tree = copy.deepcopy(t)
-                    final_tree.id = global_id
-                    final_tree.center_x = Decimal(float(final_tree.center_x) + bx)
-                    final_tree.center_y = Decimal(float(final_tree.center_y) + by)
-                    final_tree.update_polygon()
-                    new_trees.append(final_tree)
-                    global_id += 1
-                
-                blocks_placed += 1
-                
-        self.trees = new_trees
-        self._refresh_current_score()
-        
-        # Annealing suave para ajustar
-        print("   -> Ajuste fino (Tuning)...")
-        self._run_annealing(iterations=1000, initial_temp=0.5, mag_factor=0.2, visualizer=visualizer, allow_area_growth=True)
-        
-        return True
-
-    def prune_solution_from_n_plus_1(self, target_n, visualizer=None, optimize=True):
-        """
-        Estrategia de Poda (Pruning):
-        Intenta obtener una mejor solución para N partiendo de la solución N+1 y eliminando el 'peor' árbol.
-        """
-        source_n = target_n + 1
-        source_file = f"solutions/T{source_n}.csv"
-        
-        try:
-            source_trees = load_solution(source_file)
-            print(f">>> ESTRATEGIA PRUNING: Intentando derivar T{target_n} desde T{source_n} <<<")
-        except FileNotFoundError:
-            print(f"   [Pruning] Skip: No existe {source_file}")
-            return False
-
-        if len(source_trees) != source_n:
-            print(f"   [Pruning] Error: {source_file} tiene {len(source_trees)} árboles, se esperaban {source_n}.")
-            return False
-            
-        # Encontrar la mejor configuración eliminando 1 árbol
-        best_pruned_trees = None
-        best_pruned_score = float('inf')
-        
-        # Probar eliminando cada árbol para ver cuál deja la mejor estructura residual
-        # Para optimizar, podríamos probar solo eliminando los árboles del borde (convex hull), 
-        # pero por ahora probamos todos o una selección heurística.
-        
-        print(f"   Analizando eliminación de 1 árbol (de {source_n} candidatos)...")
-        
-        from shapely.ops import unary_union
-        import copy
-        
-        # Si la evaluación es barata (solo bounds), podemos probar eliminar TODOs los árboles
-        # Esto aumenta la probabilidad de encontrar el árbol óptimo para quitar.
-        candidates_to_remove = range(len(source_trees))
-        
-        # print(f"   Evaluando eliminación (Fast Mode)...")
-
-        for idx_to_remove in candidates_to_remove:
-            # Crear copia superficial si es suficiente, pero deepcopy es seguro para los polígonos
-            subset = [copy.deepcopy(t) for i, t in enumerate(source_trees) if i != idx_to_remove]
-            
-            # Recalcular centro y mover al (0,0) es CRUCIAL para que el cálculo de área sea justo
-            # si el bounding box dependía de la posición absoluta.
-            # Nuestro cálculo de bounds_score toma el bounding box, así que debemos centrarlos primero
-            # para minimizar el bounds box (aunque el bounding box size es invariante a traslación, 
-            # asegurarnos de que estén centrados ayuda a la lógica subsecuente).
-            
-            # Cálculo rápido de bounds (solo geometría, sin crear objeto packing completo si es posible)
-            # Recalculamos bounds directamente de los polígonos
-            from shapely.ops import unary_union
-            
-            # Update polygons is needed? deepcopy should preserve geometry if not modified.
-            # Pero necesitamos moverlos para centrarlos si queremos ser puristas, 
-            # aunque el ancho/alto del bounding box NO cambia con traslación global.
-            # Así que podemos saltar el recentrado para la evaluación rápida.
-            
-            polys = [t.polygon for t in subset]
-            union_poly = unary_union(polys)
-            minx, miny, maxx, maxy = union_poly.bounds
-            width = maxx - minx
-            height = maxy - miny
-            side = max(width, height)
-            
-            # Score = Area / N_remaining
-            area = side * side
-            n_rem = len(subset)
-            current_metric = area / n_rem
-            
-            if current_metric < best_pruned_score:
-                best_pruned_score = current_metric
-                # Aquí sí vale la pena hacer recentrado y guardar
-                best_pruned_trees = subset
-                # print(f"      -> Nuevo mejor candidato (ID {source_trees[idx_to_remove].id}): Score {current_metric:.4f}")
-
-        if best_pruned_trees:
-            print(f"   Mejor candidato seleccionado (Score: {best_pruned_score:.4f}).")
-            
-            # Ahora sí, recentrar y optimizar a fondo SOLO el ganador
-            subset_cx = sum(float(t.center_x) for t in best_pruned_trees) / len(best_pruned_trees)
-            subset_cy = sum(float(t.center_y) for t in best_pruned_trees) / len(best_pruned_trees)
-            
-            current_id = 1
-            for t in best_pruned_trees:
-                t.center_x = Decimal(float(t.center_x) - subset_cx)
-                t.center_y = Decimal(float(t.center_y) - subset_cy)
-                t.update_polygon()
-                t.id = current_id
-                current_id += 1
-                
-            self.trees = best_pruned_trees
-            self._refresh_current_score()
-            
-            if optimize:
-                print(f"   -> Ejecutando optimización (Tuning)...")
-                # Tuning opcional? El usuario dijo "el tunning si se usa podria ser false"
-                # Pero para garantizar calidad, un poco de tuning es bueno.
-                # Haremos un annealing estándar (no gradual eterno)
-                
-                self._run_annealing(
-                    iterations=self.config.attempt_1_iters, 
-                    initial_temp=0.1, 
-                    mag_factor=0.1, 
-                    visualizer=visualizer, 
-                    allow_area_growth=True
-                )
-            else:
-                 print(f"   -> Tuning omitido.")
-            return True
-        return False
 
     def _strategy_radial_spiral(self, tree_id):
         """
@@ -894,7 +383,7 @@ class PackingAlgorithm:
                 print(f"-> Optimizando {len(mutable_indices)} árbol(es) no fijo(s)...")
                 # Usar mayor magnitud para poder mover árboles lejanos
                 # No permitir crecimiento de área (solo optimizar árboles existentes)
-                found = self._run_annealing(
+                found = self.run_annealing(
                     iterations=self.config.mutable_opt_iters, 
                     initial_temp=self.config.mutable_opt_temp, 
                     mag_factor=self.config.mutable_opt_mag, 
@@ -907,7 +396,7 @@ class PackingAlgorithm:
                 else:
                     print("   Advertencia: No se encontró una solución válida.")
             
-            self._refresh_current_score()
+            self.refresh_current_score()
             return self.trees
 
         start_id = max([t.id for t in self.trees] + [0]) + 1
@@ -980,7 +469,7 @@ class PackingAlgorithm:
                 self.trees.append(new_tree)
 
                 # 2. Optimizar (permitir crecimiento de área al insertar nuevo árbol)
-                found = self._run_annealing(iterations=iters, initial_temp=temp, mag_factor=mag, 
+                found = self.run_annealing(iterations=iters, initial_temp=temp, mag_factor=mag, 
                                           visualizer=visualizer, allow_area_growth=True)
                 
                 # 3. Validación Final
@@ -1018,11 +507,11 @@ class PackingAlgorithm:
             if success:
                 if best_valid_state is not None:
                      self.trees = best_valid_state
-                self._refresh_current_score()
+                self.refresh_current_score()
             else:
                 # Si no hubo éxito en ningún intento
                 print(f"ERROR: No se pudo insertar Árbol {i}.")
-                self._refresh_current_score()
+                self.refresh_current_score()
                 break
 
         return self.trees
@@ -1141,7 +630,7 @@ class PackingAlgorithm:
         # Fallback
         return distances[0][0]
 
-    def _run_annealing(self, iterations, initial_temp, mag_factor, visualizer=None, allow_area_growth=False):
+    def run_annealing(self, iterations, initial_temp, mag_factor, visualizer=None, allow_area_growth=False):
         """
         Annealing parametrizable.
         mag_factor: 0.2 para ajuste fino, 3.0 para búsqueda caos.
@@ -1312,7 +801,7 @@ class PackingAlgorithm:
             # Recalcular score
             self._refresh_current_score()
             return True
-        
+
         # Si fallamos, restaurar estado inicial para no dejar basura
         # (Aunque si era una inserción nueva, el caller manejará el fallo)
         # Pero si era optimización de existentes, mejor volver al inicio que dejar un estado random.
@@ -1320,7 +809,7 @@ class PackingAlgorithm:
              # Restaurar layout inicial si no encontramos nada mejor
              # (best_area_layout se inicializó con initial_layout)
              self.trees = best_area_layout
-             self._refresh_current_score()
+             self.refresh_current_score()
              
         return False
 
@@ -1411,82 +900,3 @@ class PackingAlgorithm:
         tree.angle = Decimal(float(tree.angle) + random.uniform(-self.config.angle_noise_range, self.config.angle_noise_range))
         
         tree.update_polygon()
-    def generate_grid_zipper_solution(self, n_target, visualizer=None, rows=None, cols=None):
-        """Grid rectangular COLS×ROWS con zipper. Para N grandes como 200."""
-        import math
-        from decimal import Decimal
-        
-        # Determinar dimensiones óptimas del grid
-        # Para N=200: 20 cols × 10 rows
-        # Buscamos factorización donde cols ≈ 2*rows (rectangular horizontal)
-        best_cols, best_rows = None, None
-        
-        if rows is not None and cols is not None:
-            best_rows = rows
-            best_cols = cols
-        else:
-            min_diff = float('inf')
-            
-            for r in range(1, int(math.sqrt(n_target)) + 1):
-                if n_target % r == 0:
-                    c = n_target // r
-                    # Preferir grids donde cols ≈ 2*rows (más ancho que alto)
-                    diff = abs(c - 2*r)
-                    if diff < min_diff:
-                        min_diff = diff
-                        best_cols, best_rows = c, r
-        
-        if best_cols is None:
-            return False
-        
-        COLS = best_cols
-        ROWS = best_rows
-        
-        print(f"\n>>> GRID ZIPPER N={n_target} (Grid {COLS}×{ROWS}) <<<")
-        
-        # Parámetros del código de referencia
-        STRIDE_X = 0.4125
-        ZIPPER_OFFSET_Y = 0.50
-        ROW_HEIGHT = 0.80
-        ROW_SHIFT = -0.151
-        
-        self.trees = []
-        current_id = 1
-        
-        for row in range(ROWS):
-            for col in range(COLS):
-                x = col * STRIDE_X
-                y = row * ROW_HEIGHT
-                angle = 0
-                
-                # Pattern: Flip cada fila (Checkerboard phase)
-                # Row 0: 0, 180, 0, 180...
-                # Row 1: 180, 0, 180, 0...
-                is_inverted = (col + row) % 2 != 0
-                
-                if is_inverted:
-                    angle = 180
-                    y += ZIPPER_OFFSET_Y
-                
-                # Shift por filas
-                if row % 2 != 0:
-                    x += ROW_SHIFT
-                
-                self.trees.append(ChristmasTree(current_id, Decimal(str(x)), Decimal(str(y)), Decimal(str(angle)), fixed=False))
-                current_id += 1
-        
-        # Centrar en (0,0)
-        cx = sum(float(t.center_x) for t in self.trees) / len(self.trees)
-        cy = sum(float(t.center_y) for t in self.trees) / len(self.trees)
-        
-        for tree in self.trees:
-            tree.center_x = Decimal(float(tree.center_x) - cx)
-            tree.center_y = Decimal(float(tree.center_y) - cy)
-            tree.update_polygon()
-        
-        self._refresh_current_score()
-        
-        print("   -> Ajuste fino...")
-        self._run_annealing(iterations=self.config.attempt_1_iters, initial_temp=0.5, mag_factor=0.2, visualizer=visualizer, allow_area_growth=True)
-        
-        return True

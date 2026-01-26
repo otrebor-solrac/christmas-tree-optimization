@@ -1,12 +1,10 @@
 """
-Configuration module for the Christmas Tree Packing algorithm.
-Contains constants and configuration settings.
+Global configuration for the application.
 """
 from decimal import Decimal, getcontext
 
-# Configurar precisión para Decimal
+# Set global precision
 getcontext().prec = 25
 
-# Factor de escala para cálculos de precisión
+# Scale factor used for coordinate normalization
 SCALE_FACTOR = Decimal('1e15')
-

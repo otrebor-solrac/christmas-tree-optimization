@@ -24,6 +24,7 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+*.ipynb
 
 # Video frames (temporales)
 video_frames/
@@ -40,4 +41,16 @@ video_frames/
 # OS
 .DS_Store
 Thumbs.db
+
+# Solutions and Submissions - Exclude ALL CSV files
+*.csv
+solutions/
+solutions_compress/
+
+# Rust build artifacts
+rust_optimizer/target/
+rust_optimizer/Cargo.lock
+
+# CMA-ES output files
+outcmaes/
 

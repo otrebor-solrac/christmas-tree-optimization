@@ -32,7 +32,7 @@ def load_data_from_csv(file_path):
 
 # --- USO ---
 # Reemplaza 'tu_archivo.csv' con la ruta real
-csv_path = '/home/rc/workspace/kaggle/ChrismasTree/solutions/T16.csv' 
+csv_path = '/home/rc/workspace/kaggle/ChrismasTree/solutions/T3.csv' 
 
 initial_data = load_data_from_csv(csv_path)
 

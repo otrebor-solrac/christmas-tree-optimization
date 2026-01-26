@@ -130,3 +130,28 @@ class AnnealingConfig:
     - Higher values: More frequent updates, slower but more detailed
     - Lower values: Fewer updates, faster
     - 0: No visualization updates during optimization"""
+
+@dataclass
+class GravityConfig:
+    """
+    Configuration for Gravity/Center of Mass Compaction Algorithm.
+    """
+    steps: int = 1000
+    step_size: float = 0.01
+    noise_range: float = 0.8  # Radians
+    teleport_interval: int = 50
+    enable_teleport: bool = True
+    visualize: bool = False
+    viz_step: int = 20
+
+@dataclass
+class GeneticConfig:
+    """Configuration for Genetic Algorithm."""
+    population_size: int = 50
+    generations: int = 100
+    elite_size: int = 5         # Los mejores pasan directo
+    mutation_rate: float = 0.2
+    mutation_strength: float = 1.0
+    # Configuración para la "Gravedad" interna
+    gravity_steps_per_gen: int = 20  # Pocos pasos, solo para acomodar
+    gravity_final_steps: int = 1000  # Muchos pasos al final para el mejor
