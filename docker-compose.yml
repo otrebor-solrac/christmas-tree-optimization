@@ -1,0 +1,22 @@
+services:
+  optimizer:
+    build: .
+    image: christmas-tree-optimizer
+    container_name: christmas_optimizer
+    working_dir: /app
+    entrypoint: []
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      # Montar código local para guardar soluciones en disco directamente
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      # Sockets para interfaz gráfica X11 en Linux (opcional para el visualizador)
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    network_mode: host
+    ipc: host
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-cache:

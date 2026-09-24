@@ -1,108 +1,142 @@
-# 🎄 Guía de Uso del Optimizador (Rust)
+# 🎄 Optimizer Usage Guide (Docker & Rust)
 
-Esta guía explica cómo utilizar el comando `./target/release/christmas_tree_optimizer` para mejorar las soluciones del problema Christmas Tree Packing.
+This guide explains how to use the Rust optimizer (`christmas_tree_optimizer`) inside Docker to solve and refine the Christmas Tree Packing problem.
 
----
-
-## 🚀 Conceptos Clave
-
-1.  **I/O Automático**: 
-    - Si no especificas `-i` (input), intentará cargar del archivo `-o` (output) para resumir trabajo.
-    - Si no especificas `-o` (output), guardará por defecto en `../solutions/T[N].csv`.
-2.  **Kaggle Score**: El programa calcula internamente el score oficial (Bounding Square Area / N). **Solo guardará el resultado si es mejor que el que ya existe en el archivo de salida.**
-3.  **Ajuste de N**: Si el archivo de entrada tiene menos árboles de los indicados en `--target-n`, el programa añade los faltantes automáticamente.
+All dependencies, compilers, and tools are containerized. You do not need to install Rust or Cargo on your host system.
 
 ---
 
-## 🛠️ Comandos por Estrategia
+## 🐳 Running inside Docker
 
-### 1. Algoritmo Genético (GA)
-Ideal para exploración global y encontrar nuevas estructuras.
+### 1. Start an Interactive Container Shell
+From the repository root on your host:
 ```bash
-# Evolucionar una solución existente (500 generaciones)
-./target/release/christmas_tree_optimizer -i ../solutions/T197.csv --strategy ga --generations 500
+docker compose run --rm optimizer bash
+```
+You will enter `/app` inside the container where all commands can be run directly.
 
-# Exploración desde cero (Pure Random - ignora el input)
-./target/release/christmas_tree_optimizer --target-n 6 --strategy ga --pure-random --generations 1000
+> 💡 **One-Off Execution from Host**: You can also run any command directly from your host terminal by prepending `docker compose run --rm optimizer`, for example:
+> ```bash
+> docker compose run --rm optimizer ./rust_optimizer/target/release/christmas_tree_optimizer --target-n 20 --strategy sa --generations 5000
+> ```
+
+---
+
+## 🚀 Key Concepts
+
+1. **Automatic I/O**:
+   - If `-i` (input) is not specified, it attempts to load from the `-o` (output) file to resume progress.
+   - If `-o` (output) is not specified, it defaults to `solutions/T[N].csv`.
+2. **Kaggle Score**:
+   - The program calculates the official score: $\text{Bounding Square Area} / N$.
+   - **It only overwrites the output file if the new solution achieves a better score.**
+3. **Automatic N Adjustment**:
+   - If the input file has fewer trees than `--target-n`, missing trees are appended automatically.
+
+---
+
+## 🛠️ Strategy Commands
+
+Run these inside the container terminal (at `/app`):
+
+### 1. Genetic Algorithm (GA)
+Ideal for broad global exploration and discovering new packing topologies.
+```bash
+# Evolve an existing solution (500 generations)
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv --strategy ga --generations 500
+
+# Pure random exploration from scratch (ignores input)
+./rust_optimizer/target/release/christmas_tree_optimizer --target-n 6 --strategy ga --pure-random --generations 1000
 ```
 
-### 2. Fine-Tuning (Ajuste Fino)
-Mueve y rota árboles ligeramente para ganar decimales. Muy efectivo para el tramo final.
+### 2. Fine-Tuning
+Performs micro-rotations and translations for precision boundary tightening.
 ```bash
-./target/release/christmas_tree_optimizer -i ../solutions/T197.csv --strategy finetune --fine-tune-iters 5000
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv --strategy finetune --fine-tune-iters 5000
 ```
 
-### 3. Gravedad (Compresión)
-Empuja todos los árboles hacia el centro (0,0) mientras sea válido.
+### 3. Gravity Compression
+Pushes all trees toward the center $(0,0)$ while avoiding collisions.
 ```bash
-./target/release/christmas_tree_optimizer -i ../solutions/T197.csv --strategy gravity --gravity-steps 500
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv --strategy gravity --gravity-steps 500
 ```
 
-### 4. Recocido Simulado (Simulated Annealing)
-Bueno para salir de mínimos locales donde Fine-Tuning se queda atrapado.
+### 4. Simulated Annealing (SA) ⭐ Recommended
+Excellent for escaping local minima where greedy methods get stuck.
 ```bash
-./target/release/christmas_tree_optimizer -i ../solutions/T6.csv --strategy sa --generations 200
+# Quick annealing run
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T6.csv --strategy sa --generations 200
+
+# Thorough multi-temperature SA
+./rust_optimizer/target/release/christmas_tree_optimizer \
+  -i solutions/T50.csv \
+  --strategy sa \
+  --generations 30000 \
+  --sa-init-temp 0.001 \
+  --sa-final-temp 0.00001 \
+  --sa-step-scale 0.1
 ```
 
-### 5. ZipSkew (Geométrico)
-Estrategia de empaquetado en rejilla optimizada con CMA-ES.
+### 5. ZipSkew (Geometric Lattice)
+Lattice-based packing strategy optimized with CMA-ES.
 ```bash
-./target/release/christmas_tree_optimizer --target-n 197 --strategy zipskew --generations 100
+./rust_optimizer/target/release/christmas_tree_optimizer --target-n 197 --strategy zipskew --generations 100
 ```
 
-### 6. Pipeline Automático (All)
-Ejecuta una secuencia predefinida (ZipSkew -> Repair -> Gravity -> FineTune).
+### 6. Automated Pipeline (`all`)
+Runs a predefined multi-stage pipeline (ZipSkew -> Repair -> Gravity -> FineTune).
 ```bash
-./target/release/christmas_tree_optimizer --target-n 197 --strategy all
+./rust_optimizer/target/release/christmas_tree_optimizer --target-n 197 --strategy all
 ```
 
-### 7. Poda (Pruning)
-Elimina árboles de forma inteligente para alcanzar un N menor.
+### 7. Pruning (Top-Down)
+Removes trees intelligently to reach a smaller $N$.
 ```bash
-# Podar de T197 a T196
-./target/release/christmas_tree_optimizer -i ../solutions/T197.csv -o ../solutions/T196.csv --target-n 196 --strategy pruning
+# Prune from T197 to T196
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv -o solutions/T196.csv --target-n 196 --strategy pruning
 
-# Buscar T{N+1} automáticamente para podar si no especificas input diferente
-./target/release/christmas_tree_optimizer --target-n 6 --strategy pruning
+# Automatically search for T{N+1} to prune down to target N
+./rust_optimizer/target/release/christmas_tree_optimizer --target-n 6 --strategy pruning
 ```
 
-### 8. Incremento (Incremental)
-Añade árboles en la periferia de forma inteligente.
+### 8. Incremental (Bottom-Up)
+Adds trees to the outer perimeter of an existing solution.
 ```bash
-# Subir de T5 a T6
-./target/release/christmas_tree_optimizer -i ../solutions/T5.csv -o ../solutions/T6.csv --target-n 6 --strategy incremental
+# Expand T5 to T6
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T5.csv -o solutions/T6.csv --target-n 6 --strategy incremental
 
-# Buscar T{N-1} automáticamente para incrementar
-./target/release/christmas_tree_optimizer --target-n 197 --strategy incremental
+# Automatically find T{N-1} to increment up to target N
+./rust_optimizer/target/release/christmas_tree_optimizer --target-n 197 --strategy incremental
 ```
 
 ---
 
-## 📈 Ejemplos de Flujos de Trabajo
+## 📈 Example Workflows
 
-### De N=5 a N=6 (Incremento)
-Si tienes un récord en T5 y quieres usarlo como base para T6:
+### Transitioning from $N=5$ to $N=6$ (Incremental)
+Use a solid record in $T_5$ as the seed for $T_6$:
 ```bash
-./target/release/christmas_tree_optimizer -i ../solutions/T5.csv -o ../solutions/T6.csv --target-n 6 --strategy ga
+./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T5.csv -o solutions/T6.csv --target-n 6 --strategy ga
 ```
 
-### Optimización en Cascada
-Puedes encadenar comandos para ir puliendo una solución:
-1. **Paso 1 (Base)**: `./target/release/christmas_tree_optimizer --target-n 20 --strategy zipper`
-2. **Paso 2 (Compactar)**: `./target/release/christmas_tree_optimizer -i ../solutions/T20.csv --strategy gravity --gravity-steps 1000`
-3. **Paso 3 (Pulir)**: `./target/release/christmas_tree_optimizer -i ../solutions/T20.csv --strategy finetune --fine-tune-iters 10000`
+### Cascading Polish
+Chain commands to progressively refine an arrangement:
+1. **Step 1 (Base Construction)**: `./rust_optimizer/target/release/christmas_tree_optimizer --target-n 20 --strategy zipper`
+2. **Step 2 (Compacting)**: `./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T20.csv --strategy gravity --gravity-steps 1000`
+3. **Step 3 (Fine Polish)**: `./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T20.csv --strategy finetune --fine-tune-iters 10000`
 
 ---
 
-## 📋 Parámetros Comunes
+## 📋 Common Parameters Reference
 
-| Parámetro | Descripción | Defecto |
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `-i`, `--input` | Archivo de entrada (.csv) | (Opcional) |
-| `-o`, `--output` | Archivo donde guardar si hay mejora | `../solutions/T[N].csv` |
-| `--target-n` | Número de árboles objetivo | Inferred from filename |
-| `--generations` | Iteraciones para GA, SA, CMA-ES | 20 |
-| `--pop-size` | Tamaño de población (solo GA) | 50 |
-| `--gravity-steps`| Pasos de compresión por gravedad | 20 |
-| `--fine-tune-iters`| Pasos de ajuste fino | 1000 |
-| `--pure-random` | Ignorar input y empezar de cero | false |
+| `-i`, `--input` | Input solution file (`.csv`) | *(Optional)* |
+| `-o`, `--output` | Destination file for improvements | `solutions/T[N].csv` |
+| `--target-n` | Target number of trees | Inferred from filename |
+| `--strategy` | Strategy name (`sa`, `ga`, `finetune`, `gravity`, `deca`, `pruning`, `incremental`, `all`) | `all` |
+| `--generations` | Iterations for GA, SA, CMA-ES | `20` |
+| `--pop-size` | Population size (GA only) | `50` |
+| `--gravity-steps`| Compression steps for gravity | `20` |
+| `--fine-tune-iters`| Iterations for fine-tuning | `1000` |
+| `--pure-random` | Ignore input and start from random placements | `false` |

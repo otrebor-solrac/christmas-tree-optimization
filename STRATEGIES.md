@@ -60,9 +60,11 @@ A high-performance GA written in Rust to explore the solution space or refine ex
 
 ---
 
-## 🚀 Current Workflow
+## 🚀 Current Workflow (Inside Docker)
 
-1.  **Step 1: geometric Search (Python)**
+All commands are executed inside the Docker container (`docker compose run --rm optimizer bash`):
+
+1.  **Step 1: Geometric Search (Python)**
     Run `zip_skew_batch.py` to find the best "shape" for $N$.
     ```bash
     python app/algorithms/zip_skew_batch.py --n 197
@@ -72,13 +74,13 @@ A high-performance GA written in Rust to explore the solution space or refine ex
 2.  **Step 2: Refinement & Validation (Rust)**
     Run the Rust optimizer to apply gravity, fine-tuning, and ensure validity.
     ```bash
-    ./target/release/christmas_tree_optimizer -i ../solutions/T197.csv -o ../solutions/T197.csv --target-n 197 --strategy all
+    ./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv -o solutions/T197.csv --target-n 197 --strategy all
     ```
 
 3.  **Step 3: Random Exploration (Optional)**
     If geometric strategies fail, use the Rust GA in pure random mode to brute-force a new configuration.
     ```bash
-    ./target/release/christmas_tree_optimizer -i ../solutions/T197.csv -o ../solutions/T197.csv --target-n 197 --pure-random --generations 1000
+    ./rust_optimizer/target/release/christmas_tree_optimizer -i solutions/T197.csv -o solutions/T197.csv --target-n 197 --pure-random --generations 1000
     ```
 
 ---

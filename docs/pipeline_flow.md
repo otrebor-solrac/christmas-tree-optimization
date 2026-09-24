@@ -1,96 +1,98 @@
-# Flujo del Pipeline de Optimización
+# Optimization Pipeline Flow
 
-## Comando de Entrada
+All commands are designed to be run inside the Docker container (`docker compose run --rm optimizer bash`) or prefixed with `docker compose run --rm optimizer`.
+
+## Input Command
 
 ```bash
 python3 run_rust.py --target N [--strategy S] [--optimizer O] [--gen G] [--fine-tune F]
 ```
 
-### Parámetros
+### Parameters
 
-| Parámetro | Default | Opciones | Descripción |
-|-----------|---------|----------|-------------|
-| `--target` | requerido | 1-200 | Número de árboles objetivo |
-| `--strategy` | `all` | `all`, `mosaic`, `zipper`, `pruning`, `incremental`, `none` | Estrategia geométrica |
-| `--optimizer` | `ga` | `ga`, `cmaes`, `sa` | Optimizador (si estrategias fallan) |
-| `--gen` | 10 | entero | Generaciones del optimizador |
-| `--fine-tune` | 0 | entero | Iteraciones de Fine-Tuning |
-| `--steps` | 50 | entero | Pasos de gravedad |
-| `--pop` | 100 | entero | Tamaño de población (solo GA) |
+| Parameter | Default | Options | Description |
+|-----------|---------|---------|-------------|
+| `--target` | required | 1-200 | Target number of trees |
+| `--strategy` | `all` | `all`, `mosaic`, `zipper`, `pruning`, `incremental`, `none` | Geometric strategy |
+| `--optimizer` | `ga` | `ga`, `cmaes`, `sa` | Optimizer (if strategies fail) |
+| `--gen` | 10 | integer | Optimizer generations / iterations |
+| `--fine-tune` | 0 | integer | Fine-tuning iterations |
+| `--steps` | 50 | integer | Gravity compression steps |
+| `--pop` | 100 | integer | Population size (GA only) |
 
 ---
 
-## Diagrama de Flujo
+## Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         ENTRADA                                          │
+│                                INPUT                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  python3 run_rust.py --target N [--strategy S] [--optimizer O]          │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    FASE 1: ESTRATEGIAS GEOMÉTRICAS                       │
-│                    (Si --strategy != "none")                             │
+│                    PHASE 1: GEOMETRIC STRATEGIES                        │
+│                    (If --strategy != "none")                            │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌─ Mosaic ──────────────────────────┐                                   │
-│  │ • Solo si N % 4 == 0              │                                   │
-│  │ • Usa T{N/4}.csv como base        │                                   │
-│  │ • Crea mosaico 2x2                │                                   │
-│  └───────────────────────────────────┘                                   │
-│                                                                          │
-│  ┌─ Grid Zipper ─────────────────────┐                                   │
-│  │ • Genera desde cero               │                                   │
-│  │ • Patrón zigzag con stride_x,     │                                   │
-│  │   row_height configurables        │                                   │
-│  └───────────────────────────────────┘                                   │
-│                                                                          │
-│  ┌─ Pruning ─────────────────────────┐                                   │
-│  │ • Lee T{N+1}.csv                  │                                   │
-│  │ • Elimina 1 árbol (el peor)       │                                   │
-│  └───────────────────────────────────┘                                   │
-│                                                                          │
-│  ┌─ Incremental ─────────────────────┐                                   │
-│  │ • Lee T{N-1}.csv                  │                                   │
-│  │ • Agrega 1 árbol en la periferia  │                                   │
-│  └───────────────────────────────────┘                                   │
-│                                                                          │
-│  → Resultado: Mejor estrategia con score finito                          │
-│               O ninguna si todas fallan                                  │
+│                                                                         │
+│  ┌─ Mosaic ──────────────────────────┐                                  │
+│  │ • Only if N % 4 == 0              │                                  │
+│  │ • Uses T{N/4}.csv as seed         │                                  │
+│  │ • Creates 2x2 tiled mosaic        │                                  │
+│  └───────────────────────────────────┘                                  │
+│                                                                         │
+│  ┌─ Grid Zipper ─────────────────────┐                                  │
+│  │ • Generates from scratch          │                                  │
+│  │ • Zigzag pattern with             │                                  │
+│  │   configurable stride_x & row_h   │                                  │
+│  └───────────────────────────────────┘                                  │
+│                                                                         │
+│  ┌─ Pruning ─────────────────────────┐                                  │
+│  │ • Reads T{N+1}.csv                │                                  │
+│  │ • Removes 1 tree (worst impact)   │                                  │
+│  └───────────────────────────────────┘                                  │
+│                                                                         │
+│  ┌─ Incremental ─────────────────────┐                                  │
+│  │ • Reads T{N-1}.csv                │                                  │
+│  │ • Adds 1 tree on the perimeter    │                                  │
+│  └───────────────────────────────────┘                                  │
+│                                                                         │
+│  → Result: Best strategy with finite score                              │
+│            Or none if all fail                                          │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                     ┌───────────────┴───────────────┐
                     │                               │
-            ¿Alguna funcionó?                ¿Ninguna funcionó?
+            Any succeeded?                     All failed?
                     │                               │
                     ▼                               ▼
 ┌──────────────────────────┐     ┌─────────────────────────────────────────┐
-│ Usa la mejor estrategia  │     │        FASE 2: OPTIMIZADOR              │
-│ como candidato           │     │        (Solo si fase 1 falló)           │
+│ Use best strategy        │     │         PHASE 2: OPTIMIZER              │
+│ as candidate             │     │         (Only if phase 1 failed)        │
 └──────────────────────────┘     ├─────────────────────────────────────────┤
             │                    │                                         │
-            │                    │  Carga T{N}.csv existente o genera      │
-            │                    │  semilla con Grid Zipper                │
+            │                    │  Loads existing T{N}.csv or generates   │
+            │                    │  seed using Grid Zipper                 │
             │                    │                                         │
-            │                    │  Según --optimizer:                     │
+            │                    │  According to --optimizer:              │
             │                    │  ┌─ ga ──────────────────────┐          │
-            │                    │  │ Algoritmo Genético        │          │
-            │                    │  │ • Población + Selección   │          │
-            │                    │  │ • Crossover + Mutación    │          │
+            │                    │  │ Genetic Algorithm         │          │
+            │                    │  │ • Population + Selection  │          │
+            │                    │  │ • Crossover + Mutation    │          │
             │                    │  └───────────────────────────┘          │
             │                    │                                         │
             │                    │  ┌─ cmaes ───────────────────┐          │
-            │                    │  │ CMA-ES Adaptativo         │          │
-            │                    │  │ • 4 restarts con sigma    │          │
-            │                    │  │   creciente (5%→50%)      │          │
+            │                    │  │ Adaptive CMA-ES           │          │
+            │                    │  │ • 4 restarts with growing │          │
+            │                    │  │   sigma (5% → 50%)        │          │
             │                    │  └───────────────────────────┘          │
             │                    │                                         │
             │                    │  ┌─ sa ──────────────────────┐          │
             │                    │  │ Simulated Annealing       │          │
-            │                    │  │ • Acepta soluciones peores│          │
-            │                    │  │ • Temperatura decreciente │          │
+            │                    │  │ • Accepts worse solutions │          │
+            │                    │  │ • Decreasing temperature  │          │
             │                    │  └───────────────────────────┘          │
             │                    └─────────────────────────────────────────┘
             │                               │
@@ -98,149 +100,151 @@ python3 run_rust.py --target N [--strategy S] [--optimizer O] [--gen G] [--fine-
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    FASE 3: REFINAMIENTO                                  │
+│                     PHASE 3: REFINEMENT                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
+│                                                                         │
 │  1. save_if_better() ─────────────────────────────────────────────────── │
-│     • Verifica si candidato tiene colisiones                             │
-│     • Verifica si archivo existente tiene colisiones                     │
-│     • Guarda si: nuevo válido Y (viejo inválido O nuevo mejor score)     │
-│                                                                          │
-│  2. Gravedad (--steps pasos) ─────────────────────────────────────────── │
-│     • Mueve árboles hacia el centro                                      │
-│     • Compacta el layout                                                 │
-│     • save_if_better()                                                   │
-│                                                                          │
+│     • Checks whether candidate has collisions                           │
+│     • Checks whether existing file has collisions                       │
+│     • Saves if: new is valid AND (old invalid OR new better score)      │
+│                                                                         │
+│  2. Gravity (--steps steps) ─────────────────────────────────────────── │
+│     • Moves trees toward the center                                     │
+│     • Compacts layout                                                   │
+│     • save_if_better()                                                  │
+│                                                                         │
 │  3. Fine-Tuning (--fine-tune iters) ──────────────────────────────────── │
-│     • Perturbaciones aleatorias pequeñas                                 │
-│     • Acepta solo mejoras                                                │
-│     • save_if_better()                                                   │
-│                                                                          │
+│     • Small random perturbations                                        │
+│     • Accepts improvements only                                         │
+│     • save_if_better()                                                  │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         SALIDA                                           │
+│                                OUTPUT                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  solutions/T{N}.csv                                                      │
-│  - Mejor solución encontrada (o la existente si no hubo mejora)          │
-│  - Formato: id, x, y, deg, score                                         │
+│  solutions/T{N}.csv                                                     │
+│  - Best solution found (or existing one if no improvement)              │
+│  - Format: id, x, y, deg, score                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Dependencias entre Archivos
+## File Dependencies
 
 ```
 T1.csv  ←───────────────────────────────────────────────────────────────┐
 T2.csv  ← Incremental(T1)                                               │
 T3.csv  ← Incremental(T2)                                               │
-T4.csv  ← Mosaic(T1) o Incremental(T3)                                  │
+T4.csv  ← Mosaic(T1) or Incremental(T3)                                  │
 ...                                                                     │
 T50.csv ← Zipper, Pruning(T51), Incremental(T49)                        │
 ...                                                                     │
 T200.csv ← Zipper, Pruning(T201), Mosaic(T50)                           │
                                                                         │
-                    Pruning lee archivo de N+1 ─────────────────────────┘
+                    Pruning reads N+1 file ─────────────────────────────┘
 ```
 
 ---
 
-## Detalle de Estrategias
+## Strategy Details
 
 ### Mosaic
-- **Condición**: N es múltiplo de 4
+- **Condition**: N is a multiple of 4
 - **Input**: `solutions/T{N/4}.csv`
-- **Proceso**: Duplica la solución base en un mosaico 2x2, escalando posiciones
+- **Process**: Duplicates base solution into a 2x2 grid, scaling coordinates
 
 ### Grid Zipper
-- **Condición**: Siempre disponible
-- **Input**: Ninguno (genera desde cero)
-- **Proceso**: Crea patrón zigzag con árboles alternando orientación (0° y 180°)
-- **Parámetros**: `stride_x` (separación horizontal), `row_height` (separación vertical)
+- **Condition**: Always available
+- **Input**: None (generates from scratch)
+- **Process**: Creates alternating zigzag rows (0° and 180° rotations)
+- **Parameters**: `stride_x` (horizontal spacing), `row_height` (vertical spacing)
 
 ### Pruning
-- **Condición**: Existe `T{N+1}.csv`
+- **Condition**: `T{N+1}.csv` exists
 - **Input**: `solutions/T{N+1}.csv`
-- **Proceso**: Elimina el árbol que menos afecta el bounding box
+- **Process**: Removes the tree with the least negative impact on the bounding box
 
 ### Incremental
-- **Condición**: Existe `T{N-1}.csv`
+- **Condition**: `T{N-1}.csv` exists
 - **Input**: `solutions/T{N-1}.csv`
-- **Proceso**: Agrega un árbol en la periferia del layout existente
+- **Process**: Adds a new tree along the perimeter of the existing layout
 
 ---
 
-## Detalle de Optimizadores
+## Optimizer Details
 
-### GA (Algoritmo Genético)
-- **Uso**: Default cuando estrategias geométricas fallan
-- **Proceso**: 
-  - Crea población de soluciones
-  - Selección por torneo
-  - Crossover entre mejores individuos
-  - Mutación aleatoria
+### GA (Genetic Algorithm)
+- **Use**: Default when geometric strategies fail
+- **Process**: 
+  - Generates candidate population
+  - Tournament selection
+  - Crossover between elite individuals
+  - Random mutation
 
 ### CMA-ES (Covariance Matrix Adaptation)
-- **Uso**: `--optimizer cmaes`
-- **Proceso**:
-  - Optimización continua basada en distribución gaussiana
-  - 4 restarts con sigma creciente (5%, 15%, 30%, 50%)
-  - Mejor para escapar mínimos locales con exploración adaptativa
+- **Use**: `--optimizer cmaes`
+- **Process**:
+  - Continuous optimization based on Gaussian distribution
+  - 4 restarts with expanding sigma (5%, 15%, 30%, 50%)
+  - Escapes local minima via adaptive covariance search
 
 ### SA (Simulated Annealing)
-- **Uso**: `--optimizer sa`
-- **Proceso**:
-  - Acepta soluciones peores con probabilidad decreciente
-  - Temperatura inicial alta → baja
-  - Puede explorar configuraciones muy diferentes
+- **Use**: `--optimizer sa`
+- **Process**:
+  - Probabilistically accepts worse solutions to escape local traps
+  - High initial temperature → cooling down
+  - High exploratory capability
 
 ---
 
-## Detalle de Refinamiento
+## Refinement Details
 
-### save_if_better()
+### save_if_better() Logic
 ```
-SI nuevo_tiene_colisiones:
-    NO guardar
+IF new_has_collisions:
+    DO NOT SAVE
     
-SI archivo_existe:
-    SI archivo_tiene_colisiones:
-        GUARDAR (reemplaza inválido)
-    ELSE SI nuevo_score < viejo_score:
-        GUARDAR (mejora)
+IF file_already_exists:
+    IF existing_file_has_collisions:
+        SAVE (replaces invalid solution)
+    ELSE IF new_score < old_score:
+        SAVE (verified improvement)
 ELSE:
-    GUARDAR (archivo no existe)
+    SAVE (new solution created)
 ```
 
-### Gravedad
-- Mueve cada árbol hacia el centroide del layout
-- Paso pequeño (0.01 por iteración)
-- Verifica colisiones después de cada movimiento
+### Gravity Compression
+- Drags each tree toward the layout centroid
+- Small step increment (0.01 per iteration)
+- Performs collision checks after each adjustment
 
 ### Fine-Tuning
-- Perturbaciones aleatorias pequeñas en x, y, ángulo
-- Solo acepta si reduce el score
-- Rápido, enfocado en micro-optimizaciones
+- Micro perturbations on x, y, and angle
+- Accepts only changes that strictly reduce score
+- Fast local polish for boundary tightening
 
 ---
 
-## Ejemplos de Uso
+## Usage Examples (Inside Docker)
+
+Execute these inside the container (`docker compose run --rm optimizer bash`):
 
 ```bash
-# Ejecutar todas las estrategias para T50
+# Run all strategies for T50
 python3 run_rust.py --target 50 --fine-tune 100
 
-# Solo Pruning para T50
+# Run pruning only for T50
 python3 run_rust.py --target 50 --strategy pruning --fine-tune 100
 
-# Forzar CMA-ES sin estrategias geométricas
+# Force CMA-ES without geometric seeds
 python3 run_rust.py --target 50 --strategy none --optimizer cmaes --gen 100
 
-# Simulated Annealing con muchas iteraciones
+# Simulated Annealing with many iterations
 python3 run_rust.py --target 50 --strategy none --optimizer sa --gen 50
 
-# Batch de 200 a 1 (para Pruning)
+# Pruning cascade from 200 down to 1
 for n in {200..1}; do python3 run_rust.py --target $n --strategy pruning --fine-tune 100; done
 ```
