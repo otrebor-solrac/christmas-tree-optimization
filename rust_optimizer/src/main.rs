@@ -53,6 +53,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     force: bool,
 
+    #[arg(long, default_value_t = false)]
+    use_groups: bool,
+
     #[arg(long, default_value_t = 0.0)]
     freeze_inner: f64,
 
@@ -243,7 +246,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or(t_clone)
         }
         "ga" => {
-            run_genetic_algorithm(trees.clone(), args.pop_size, args.generations, args.gravity_steps, vec![], &output_path, args.pure_random)
+            let groups = if args.use_groups {
+                println!("👥 Group mode enabled (coupling pairs of trees for GA)");
+                (0..trees.len()).step_by(2)
+                    .filter(|&i| i + 1 < trees.len())
+                    .map(|i| vec![i, i + 1])
+                    .collect()
+            } else {
+                vec![]
+            };
+            run_genetic_algorithm(trees.clone(), args.pop_size, args.generations, args.gravity_steps, groups, &output_path, args.pure_random)
         }
         "sa" => {
             // Calcular freeze_inner si se usa --freeze-base con --base-n

@@ -70,15 +70,26 @@ Advanced evolutionary strategy for continuous optimization:
 
 ---
 
-## 🚀 How to Run
+## 🚀 How to Run (Docker)
 
-### Building the Rust Optimizer
+All tools, compilers, and dependencies are packaged inside Docker. No local Rust or Python installation is required.
+
+### 1. Build the Docker Image
 ```bash
-cd rust_optimizer
-cargo build --release
+docker compose build
 ```
 
-### Running Individual Optimizations
+### 2. Start an Interactive Container Session
+```bash
+docker compose run --rm optimizer bash
+```
+Inside `/app`, all tools (`cargo`, `rustc`, `python3`) and pre-built binaries are ready to use.
+
+> 💡 **Tip**: All commands below can be executed directly inside the container bash, or from your host by prefixing them with `docker compose run --rm optimizer <command>`.
+
+---
+
+### Running Optimizations (Inside Container)
 
 #### Basic Usage
 ```bash
@@ -153,7 +164,6 @@ cargo build --release
 Runs a multi-stage optimization pipeline for a range of N values:
 
 ```bash
-cd rust_optimizer
 python batch_deca_sa.py
 ```
 
@@ -169,15 +179,20 @@ python batch_deca_sa.py
 
 ---
 
-## 🎨 Visualization with Rust Visualizer
+## 🎨 Visualization with Rust Visualizer (GUI)
 
-The Rust visualizer provides an interactive GUI for exploring and optimizing solutions in real-time.
+The Rust visualizer provides an interactive GUI for exploring and optimizing solutions in real-time. It runs through Docker using X11 socket forwarding on Linux.
 
-### Basic Usage
+### 1. Allow X11 Connections (Run once on host machine):
 ```bash
-cd rust_optimizer
-./target/release/visualizer ../solutions/T25.csv
+xhost +local:root
 ```
+
+### 2. Launch Visualizer (From Host):
+```bash
+docker compose run --rm optimizer ./rust_optimizer/target/release/visualizer solutions/T25.csv
+```
+*(Or run `./rust_optimizer/target/release/visualizer solutions/T25.csv` directly inside the container bash).*
 
 ### Keyboard Controls
 

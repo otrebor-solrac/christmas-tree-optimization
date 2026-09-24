@@ -87,22 +87,53 @@ fn get_colliding_indices(trees: &[Tree]) -> (HashSet<usize>, Vec<(usize, usize)>
 }
 
 
+fn get_solutions_dir() -> PathBuf {
+    if std::path::Path::new("solutions").is_dir() {
+        PathBuf::from("solutions")
+    } else {
+        PathBuf::from("../solutions")
+    }
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
     let args = VizArgs::parse();
     
     let mut file_path = if let Some(ref s) = args.input {
         let p = PathBuf::from(s);
-        if p.exists() { p } else { PathBuf::from("..").join(s) }
+        if p.exists() { 
+            p 
+        } else if get_solutions_dir().join(s).exists() { 
+            get_solutions_dir().join(s) 
+        } else if PathBuf::from("..").join(s).exists() { 
+            PathBuf::from("..").join(s) 
+        } else {
+            p
+        }
     } else {
-        PathBuf::from("../solutions/T25.csv") 
+        get_solutions_dir().join("T25.csv") 
     };
 
     println!("Cargando: {}", file_path.display());
     let mut trees = load_trees(&file_path).unwrap_or_else(|e| {
-        println!("Error: {}. Iniciando vacío.", e);
+        println!("Error: {}. Generando árboles iniciales...", e);
         vec![]
     });
+
+    if trees.is_empty() {
+        let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let n: usize = stem.trim_start_matches(|c: char| !c.is_numeric())
+            .chars().take_while(|c| c.is_numeric()).collect::<String>()
+            .parse().unwrap_or(20);
+        let target_count = if n == 0 { 20 } else { n };
+        println!("🌱 Generando semilla inicial de {} árboles para {}...", target_count, stem);
+        trees = (1..=target_count).map(|i| {
+            let cols = ((target_count as f64).sqrt().ceil() as usize).max(1);
+            let row = (i - 1) / cols;
+            let col = (i - 1) % cols;
+            Tree::new(i, (col as f64 - cols as f64 / 2.0) * 0.9, (row as f64 - cols as f64 / 2.0) * 0.9, 0.0)
+        }).collect();
+    }
     
     // Modo de entrada de texto para cargar soluciones
     let mut input_mode = false;
@@ -185,11 +216,26 @@ async fn main() {
                         cam_target = vec2(center_x as f32, center_y as f32);
                         zoom_scale = 0.8 / (side as f32);
                     }
-                    
                     println!("✅ Cargado: {} árboles, score: {:.6}", trees.len(), score);
                 }
-                Err(e) => {
-                    println!("❌ Error cargando {}: {}", path.display(), e);
+                Err(_) => {
+                    println!("🌱 Archivo {} no existe. Inicializando árboles...", path.display());
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let n: usize = stem.trim_start_matches(|c: char| !c.is_numeric())
+                        .chars().take_while(|c| c.is_numeric()).collect::<String>()
+                        .parse().unwrap_or(20);
+                    let target_count = if n == 0 { 20 } else { n };
+                    let cols = ((target_count as f64).sqrt().ceil() as usize).max(1);
+                    trees = (1..=target_count).map(|i| {
+                        let row = (i - 1) / cols;
+                        let col = (i - 1) % cols;
+                        Tree::new(i, (col as f64 - cols as f64 / 2.0) * 0.9, (row as f64 - cols as f64 / 2.0) * 0.9, 0.0)
+                    }).collect();
+                    file_path = path;
+                    (colliding_indices, collision_pairs) = get_colliding_indices(&trees);
+                    score = calculate_score(&trees);
+                    cam_target = vec2(0.0, 0.0);
+                    zoom_scale = 0.8 / (cols as f32 * 1.2);
                 }
             }
         }
@@ -218,7 +264,7 @@ async fn main() {
             }
             if is_key_pressed(KeyCode::Enter) {
                 // Intentar cargar la solución
-                load_target = Some(PathBuf::from(format!("../solutions/{}.csv", input_buffer)));
+                load_target = Some(get_solutions_dir().join(format!("{}.csv", input_buffer)));
                 input_mode = false;
                 input_buffer.clear();
             }
@@ -254,7 +300,7 @@ async fn main() {
         let now = get_time();
         if auto_reload && now - last_reload_time > 0.1 { // 10Hz limit
             last_reload_time = now;
-            let live_path = PathBuf::from("../solutions/live.csv");
+            let live_path = get_solutions_dir().join("live.csv");
             if live_path.exists() {
                  if let Ok(new_trees) = load_trees(&live_path) {
                      trees = new_trees;
@@ -570,7 +616,7 @@ async fn main() {
                     final_t, 
                     0.3, 
                     step_scale,
-                    Some(std::path::PathBuf::from("../solutions/live.csv"))
+                    Some(get_solutions_dir().join("live.csv"))
                 );
             });
             auto_reload = true; // Activar visualización en vivo

@@ -10,5 +10,6 @@ geo = "0.26"
 rand = "0.8"
 rayon = "1.7"
 clap = { version = "4.0", features = ["derive"] }
+clap_lex = "<1.1.0"
 macroquad = "0.4"
 cmaes = "0.2"
